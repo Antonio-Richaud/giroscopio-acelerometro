@@ -1,6 +1,14 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
+/**
+ * Antonio Richaud · Consola de Vuelo
+ * - Carga GLB: /models/nave.glb (public/models/nave.glb)
+ * - Render: Edges (líneas limpias) + glow
+ * - HUD en español
+ * - Telemetría: WebSocket desde ESP32 (JSON)
+ */
+
 // ================== SETUP UI ==================
 const app = document.querySelector<HTMLDivElement>("#app")!;
 document.body.style.margin = "0";
@@ -20,6 +28,7 @@ hud.style.fontFamily =
 hud.style.color = "#7CFFB2";
 hud.style.textShadow = "0 0 10px rgba(124,255,178,0.35)";
 hud.style.padding = "18px";
+hud.style.zIndex = "10";
 app.appendChild(hud);
 
 hud.innerHTML = `
@@ -27,62 +36,69 @@ hud.innerHTML = `
     <div style="min-width:340px;">
       <div style="font-size:14px; opacity:.85;">Antonio Richaud · Consola de Vuelo</div>
       <div style="font-size:22px; margin-top:6px;">
-        Giroscopio + Acelerómetro <span style="opacity:.7;">(SIM)</span>
+        Giroscopio + Acelerómetro <span style="opacity:.7;" id="modeVal">(EN VIVO)</span>
       </div>
 
       <div style="margin-top:14px; padding:12px; border:1px solid rgba(124,255,178,.25); border-radius:14px; background:rgba(10,30,18,.15);">
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px 18px;">
           <div>
             <div style="font-size:12px; opacity:.75;">Inclinación (Roll)</div>
-            <div id="rollVal" style="font-size:20px;">0.0°</div>
+            <div id="rollVal" style="font-size:20px;">--</div>
           </div>
           <div>
             <div style="font-size:12px; opacity:.75;">Cabeceo (Pitch)</div>
-            <div id="pitchVal" style="font-size:20px;">0.0°</div>
+            <div id="pitchVal" style="font-size:20px;">--</div>
           </div>
           <div>
             <div style="font-size:12px; opacity:.75;">Guiñada (Yaw)</div>
-            <div id="yawVal" style="font-size:20px;">0.0°</div>
+            <div id="yawVal" style="font-size:20px;">--</div>
           </div>
           <div>
             <div style="font-size:12px; opacity:.75;">Fuerza G</div>
-            <div id="gVal" style="font-size:20px;">1.00 g</div>
+            <div id="gVal" style="font-size:20px;">--</div>
           </div>
         </div>
 
         <div style="margin-top:14px;">
           <div style="font-size:12px; opacity:.75;">Aceleración (ax, ay, az)</div>
-          <div id="accVal" style="font-size:14px; margin-top:6px; opacity:.95;">0.00, 0.00, 1.00</div>
+          <div id="accVal" style="font-size:14px; margin-top:6px; opacity:.95;">--</div>
         </div>
       </div>
 
       <div style="margin-top:12px; display:grid; gap:10px;">
         <div style="padding:10px; border:1px solid rgba(124,255,178,.20); border-radius:14px; background:rgba(10,30,18,.10);">
-          <div style="font-size:12px; opacity:.75;">Empuje (simulado)</div>
+          <div style="font-size:12px; opacity:.75;">Empuje (derivado de G)</div>
           <div style="height:10px; margin-top:8px; border:1px solid rgba(124,255,178,.30); border-radius:999px; overflow:hidden;">
-            <div id="thrBar" style="height:100%; width:35%; background:rgba(124,255,178,.25);"></div>
+            <div id="thrBar" style="height:100%; width:0%; background:rgba(124,255,178,.25);"></div>
           </div>
         </div>
 
         <div style="padding:10px; border:1px solid rgba(124,255,178,.20); border-radius:14px; background:rgba(10,30,18,.10);">
           <div style="font-size:12px; opacity:.75;">Estabilidad</div>
           <div style="height:10px; margin-top:8px; border:1px solid rgba(124,255,178,.30); border-radius:999px; overflow:hidden;">
-            <div id="stbBar" style="height:100%; width:80%; background:rgba(124,255,178,.16);"></div>
+            <div id="stbBar" style="height:100%; width:0%; background:rgba(124,255,178,.16);"></div>
           </div>
         </div>
       </div>
     </div>
 
-    <div style="text-align:right; min-width:280px;">
+    <div style="text-align:right; min-width:320px;">
       <div style="padding:12px; border:1px solid rgba(124,255,178,.25); border-radius:14px; background:rgba(10,30,18,.15);">
         <div style="font-size:12px; opacity:.75;">Enlace</div>
-        <div id="linkVal" style="font-size:18px;">SIMULADO</div>
+        <div id="linkVal" style="font-size:18px;">Conectando…</div>
 
         <div style="margin-top:12px; font-size:12px; opacity:.75;">FPS</div>
         <div id="fpsVal" style="font-size:18px;">0</div>
 
         <div style="margin-top:12px; font-size:12px; opacity:.75;">Estado</div>
-        <div id="statusVal" style="font-size:14px; opacity:.95;">Todo en orden</div>
+        <div id="statusVal" style="font-size:14px; opacity:.95;">Inicializando…</div>
+      </div>
+
+      <div style="margin-top:12px; padding:12px; border:1px solid rgba(124,255,178,.20); border-radius:14px; background:rgba(10,30,18,.08); text-align:left;">
+        <div style="font-size:12px; opacity:.75;">Nota</div>
+        <div style="font-size:13px; opacity:.9; margin-top:6px;">
+          El yaw puede derivar (MPU6050 sin magnetómetro). Roll/Pitch salen finos.
+        </div>
       </div>
     </div>
   </div>
@@ -99,11 +115,13 @@ const pitchEl = document.getElementById("pitchVal")!;
 const yawEl = document.getElementById("yawVal")!;
 const gEl = document.getElementById("gVal")!;
 const accEl = document.getElementById("accVal")!;
-const thrBar = document.getElementById("thrBar")!;
-const stbBar = document.getElementById("stbBar")!;
+const thrBar = document.getElementById("thrBar") as HTMLDivElement;
+const stbBar = document.getElementById("stbBar") as HTMLDivElement;
 const fpsEl = document.getElementById("fpsVal")!;
 const statusEl = document.getElementById("statusVal")!;
 const wsEl = document.getElementById("wsVal")!;
+const linkEl = document.getElementById("linkVal")!;
+const modeEl = document.getElementById("modeVal")!;
 
 // ================== THREE SCENE ==================
 const scene = new THREE.Scene();
@@ -115,6 +133,9 @@ camera.position.set(0, 1.2, 6);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.domElement.style.position = "absolute";
+renderer.domElement.style.inset = "0";
+renderer.domElement.style.zIndex = "0";
 app.appendChild(renderer.domElement);
 
 // Grid
@@ -138,8 +159,11 @@ const glowMat = new THREE.LineBasicMaterial({
 });
 
 function convertirAEdges(root: THREE.Object3D) {
+  let meshes = 0;
+
   root.traverse((obj) => {
     if ((obj as THREE.Mesh).isMesh) {
+      meshes++;
       const mesh = obj as THREE.Mesh;
 
       const edges = new THREE.EdgesGeometry(mesh.geometry, 18);
@@ -150,7 +174,7 @@ function convertirAEdges(root: THREE.Object3D) {
       mesh.add(lines);
       mesh.add(glow);
 
-      // Ocultar sólido sin apagar el nodo
+      // Ocultar sólido sin apagar el nodo (si no, desaparecen los hijos)
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       for (const m of mats) {
         m.transparent = true;
@@ -159,6 +183,8 @@ function convertirAEdges(root: THREE.Object3D) {
       }
     }
   });
+
+  console.log("Meshes convertidos a edges:", meshes);
 }
 
 function encuadrarCamara(obj: THREE.Object3D) {
@@ -181,13 +207,11 @@ function encuadrarCamara(obj: THREE.Object3D) {
   camera.updateProjectionMatrix();
   camera.lookAt(0, 0, 0);
 
-  // ajusta fog según cámara
   scene.fog = new THREE.Fog(0x000000, camera.position.z * 0.6, camera.position.z * 2.2);
 }
 
 let nave: THREE.Object3D | null = null;
 
-// Modelo
 const loader = new GLTFLoader();
 const MODEL_PATH = "/models/nave.glb";
 
@@ -198,6 +222,7 @@ loader.load(
     convertirAEdges(nave);
     scene.add(nave);
     encuadrarCamara(nave);
+    statusEl.textContent = "Modelo cargado ✅";
   },
   undefined,
   (err) => {
@@ -206,16 +231,68 @@ loader.load(
   }
 );
 
-// ================== HELPERS ==================
+// ================== TELEMETRÍA (WS) ==================
+type Telemetry = {
+  r: number; // roll grados
+  p: number; // pitch grados
+  y: number; // yaw grados
+  ax: number; // g
+  ay: number; // g
+  az: number; // g
+  g: number;  // magnitud (g)
+};
+
+let telem: Telemetry | null = null;
+let lastTelemAt = 0;
+
+// 👇 CAMBIA ESTA IP por la que imprime tu ESP32 en el Serial Monitor
+const WS_URL = "ws://192.168.1.77:81";
+
+function conectarWS() {
+  wsEl.textContent = "WebSocket: conectando…";
+  linkEl.textContent = "Conectando…";
+  modeEl.textContent = "(EN VIVO)";
+
+  const ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    wsEl.textContent = "WebSocket: conectado ✅";
+    linkEl.textContent = "EN VIVO";
+    statusEl.textContent = "Recibiendo telemetría…";
+  };
+
+  ws.onclose = () => {
+    telem = null;
+    wsEl.textContent = "WebSocket: desconectado ❌ (reintentando…)";
+    linkEl.textContent = "Sin enlace";
+    statusEl.textContent = "Esperando conexión…";
+    setTimeout(conectarWS, 800);
+  };
+
+  ws.onerror = () => {
+    // onclose hará el retry
+  };
+
+  ws.onmessage = (ev) => {
+    try {
+      telem = JSON.parse(ev.data) as Telemetry;
+      lastTelemAt = performance.now();
+    } catch {
+      // si algún día mandas CSV, aquí lo parseamos
+    }
+  };
+}
+
+conectarWS();
+
+// ================== LOOP ==================
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
 }
 
-// ================== LOOP (SIM) ==================
 let last = performance.now();
 let fpsSmooth = 60;
 
-const t0 = performance.now();
 function animate() {
   requestAnimationFrame(animate);
 
@@ -223,52 +300,62 @@ function animate() {
   const dt = (now - last) / 1000;
   last = now;
 
+  // FPS
   const fps = 1 / Math.max(dt, 0.00001);
   fpsSmooth = fpsSmooth * 0.9 + fps * 0.1;
   fpsEl.textContent = fpsSmooth.toFixed(0);
 
-  // Telemetría simulada
-  const t = (now - t0) / 1000;
-  const roll = Math.sin(t * 1.25) * 0.7;
-  const pitch = Math.sin(t * 0.95) * 0.35;
-  const yaw = Math.sin(t * 0.45) * 0.25;
+  // Si no llega telemetría, lo decimos claro
+  const stale = performance.now() - lastTelemAt > 800; // 0.8s sin datos
+  if (!telem || stale) {
+    statusEl.textContent = "Sin datos… (¿ESP32 encendido / IP correcta?)";
+    // Render igual para que no se congele
+    renderer.render(scene, camera);
+    return;
+  }
 
-  const ax = Math.sin(t * 1.7) * 0.18;      // en "g"
-  const ay = Math.cos(t * 1.3) * 0.14;      // en "g"
-  const az = 1.0 + Math.sin(t * 1.05) * 0.08; // gravedad ~1g
+  // Datos en grados (del ESP32)
+  const rollDeg = telem.r;
+  const pitchDeg = telem.p;
+  const yawDeg = telem.y;
 
-  const g = Math.sqrt(ax * ax + ay * ay + az * az);
+  // Convertir a radianes para Three
+  const roll = THREE.MathUtils.degToRad(rollDeg);
+  const pitch = THREE.MathUtils.degToRad(pitchDeg);
+  const yaw = THREE.MathUtils.degToRad(yawDeg);
 
   // Aplicar a nave
   if (nave) nave.rotation.set(pitch, yaw, roll);
 
-  // HUD
-  rollEl.textContent = `${THREE.MathUtils.radToDeg(roll).toFixed(1)}°`;
-  pitchEl.textContent = `${THREE.MathUtils.radToDeg(pitch).toFixed(1)}°`;
-  yawEl.textContent = `${THREE.MathUtils.radToDeg(yaw).toFixed(1)}°`;
-  gEl.textContent = `${g.toFixed(2)} g`;
-  accEl.textContent = `${ax.toFixed(2)}, ${ay.toFixed(2)}, ${az.toFixed(2)}`;
+  // HUD numérico
+  rollEl.textContent = `${rollDeg.toFixed(1)}°`;
+  pitchEl.textContent = `${pitchDeg.toFixed(1)}°`;
+  yawEl.textContent = `${yawDeg.toFixed(1)}°`;
 
-  // barras
-  const empuje = clamp((g - 0.95) * 140, 5, 100);
-  const estabilidad = clamp(100 - Math.abs(THREE.MathUtils.radToDeg(roll)) * 1.1, 10, 100);
-  (thrBar as HTMLDivElement).style.width = `${empuje}%`;
-  (stbBar as HTMLDivElement).style.width = `${estabilidad}%`;
+  gEl.textContent = `${telem.g.toFixed(2)} g`;
+  accEl.textContent = `${telem.ax.toFixed(2)}, ${telem.ay.toFixed(2)}, ${telem.az.toFixed(2)}`;
 
-  // estado
+  // Barras: empuje (basado en G) + estabilidad (basado en inclinación)
+  const empuje = clamp((telem.g - 0.95) * 140, 0, 100);
+  const estabilidad = clamp(100 - Math.abs(rollDeg) * 1.1 - Math.abs(pitchDeg) * 0.8, 0, 100);
+  thrBar.style.width = `${empuje}%`;
+  stbBar.style.width = `${estabilidad}%`;
+
+  // Estado: límites (ajústalos a gusto)
+  const LIM_ROLL = 55;
+  const LIM_PITCH = 35;
+
   statusEl.textContent =
-    Math.abs(THREE.MathUtils.radToDeg(roll)) > 40 || Math.abs(THREE.MathUtils.radToDeg(pitch)) > 28
+    Math.abs(rollDeg) > LIM_ROLL || Math.abs(pitchDeg) > LIM_PITCH
       ? "Advertencia: límite de actitud"
       : "Todo en orden";
-
-  wsEl.textContent = "WebSocket: pendiente (SIM activo)";
 
   renderer.render(scene, camera);
 }
 
 animate();
 
-// Resize
+// ================== RESIZE ==================
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
