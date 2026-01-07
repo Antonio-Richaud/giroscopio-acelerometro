@@ -28,7 +28,7 @@ app.innerHTML = `
       <header class="fc-topbar">
         <div class="fc-brand">
           <div class="fc-brand__title">Antonio Richaud · Flight Console</div>
-          <div class="fc-brand__sub">ESP32 + MPU6050 · WebSocket · Telemetría en tiempo real</div>
+          <div class="fc-brand__sub">ESP32 + MPU6050</div>
         </div>
 
         <div class="fc-conn">
@@ -94,7 +94,6 @@ app.innerHTML = `
             <span class="fc-dot" id="dotData"></span>
             <span id="dataStatus">Esperando datos…</span>
           </div>
-          <div class="fc-footer__hint">Tip: calibra con la nave quieta y “nivelada”.</div>
         </div>
       </aside>
 
