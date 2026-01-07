@@ -8,208 +8,367 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 const DEFAULT_WS_URL = "ws://192.168.68.108:81";
 const MODEL_URL = "/models/nave.glb";
 
-// Umbral de advertencia de actitud (grados)
+// Umbral de advertencia (grados)
 const LIMITE_ACTITUD_DEG = 75;
 
-// Suavizado (0 = nada, 1 = súper lento). Recomiendo 0.15~0.25
+// Suavizado EMA (0 = nada, 0.15~0.25 recomendado)
 const SMOOTHING = 0.18;
 
 // ===========================
-// UI (Vanilla) - se inyecta solita
+// UI
 // ===========================
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) throw new Error("No encuentro #app. Revisa tu index.html.");
 
 app.innerHTML = `
   <div class="fc-root">
-    <header class="fc-topbar">
-      <div class="fc-title">
-        <div class="fc-title__main">Antonio Richaud · Flight Console</div>
-        <div class="fc-title__sub">MPU (6050/6500) · ESP32 · WebSocket · Wireframe</div>
-      </div>
+    <canvas id="scene"></canvas>
 
-      <div class="fc-conn">
-        <span class="fc-pill" id="wsStatus">WS: desconectado</span>
-        <input class="fc-input" id="wsUrl" value="${DEFAULT_WS_URL}" />
-        <button class="fc-btn" id="btnConnect">Conectar</button>
-        <button class="fc-btn" id="btnCalibrate">Calibrar (cero)</button>
-      </div>
-    </header>
+    <div class="fc-hud">
+      <header class="fc-topbar">
+        <div class="fc-brand">
+          <div class="fc-brand__title">Antonio Richaud · Flight Console</div>
+          <div class="fc-brand__sub">ESP32 + MPU6050 · WebSocket · Telemetría en tiempo real</div>
+        </div>
 
-    <main class="fc-main">
-      <section class="fc-panel">
-        <div class="fc-panel__title">Telemetría</div>
+        <div class="fc-conn">
+          <span class="fc-pill" id="wsStatus">WS: desconectado</span>
+          <input class="fc-input" id="wsUrl" value="${DEFAULT_WS_URL}" />
+          <button class="fc-btn" id="btnConnect">Conectar</button>
+          <button class="fc-btn fc-btn--ghost" id="btnCalibrate">Calibrar</button>
+        </div>
+      </header>
+
+      <aside class="fc-panel">
+        <div class="fc-panel__title">TELEMETRÍA</div>
 
         <div class="fc-grid">
           <div class="fc-card">
-            <div class="fc-card__k">Roll</div>
+            <div class="fc-card__k">ROLL</div>
             <div class="fc-card__v" id="vRoll">—</div>
             <div class="fc-card__u">°</div>
           </div>
           <div class="fc-card">
-            <div class="fc-card__k">Pitch</div>
+            <div class="fc-card__k">PITCH</div>
             <div class="fc-card__v" id="vPitch">—</div>
             <div class="fc-card__u">°</div>
           </div>
           <div class="fc-card">
-            <div class="fc-card__k">Yaw</div>
+            <div class="fc-card__k">YAW</div>
             <div class="fc-card__v" id="vYaw">—</div>
             <div class="fc-card__u">°</div>
           </div>
 
           <div class="fc-card">
-            <div class="fc-card__k">Ax</div>
+            <div class="fc-card__k">AX</div>
             <div class="fc-card__v" id="vAx">—</div>
             <div class="fc-card__u">g</div>
           </div>
           <div class="fc-card">
-            <div class="fc-card__k">Ay</div>
+            <div class="fc-card__k">AY</div>
             <div class="fc-card__v" id="vAy">—</div>
             <div class="fc-card__u">g</div>
           </div>
           <div class="fc-card">
-            <div class="fc-card__k">Az</div>
+            <div class="fc-card__k">AZ</div>
             <div class="fc-card__v" id="vAz">—</div>
             <div class="fc-card__u">g</div>
           </div>
 
           <div class="fc-card fc-card--wide">
-            <div class="fc-card__k">Fuerza G total</div>
+            <div class="fc-card__k">FUERZA G (TOTAL)</div>
             <div class="fc-card__v" id="vG">—</div>
             <div class="fc-card__u">g</div>
-          </div>
-
-          <div class="fc-card fc-card--wide">
-            <div class="fc-card__k">Modelo</div>
-            <div class="fc-card__v" id="vModel">Cargando…</div>
-            <div class="fc-card__u"></div>
           </div>
         </div>
 
         <div class="fc-warn" id="warnBox" style="display:none;">
-          <div class="fc-warn__t">Advertencia: límite de actitud</div>
+          <div class="fc-warn__t">⚠ LÍMITE DE ACTITUD</div>
           <div class="fc-warn__d">
-            Pasaste el umbral de inclinación. No es peligro real, es para avisarte que
-            en ángulos extremos las lecturas pueden verse raras (y el yaw deriva sin brújula).
+            Estás en ángulos extremos. Se vale, pero el yaw puede derivar (no hay magnetómetro).
           </div>
         </div>
 
-        <div class="fc-notes">
-          <div class="fc-notes__t">Notas rápidas</div>
-          <ul>
-            <li>Si la nave gira “al revés”, invierte signos en <code>applyAttitude()</code>.</li>
-            <li>El yaw deriva (normal sin magnetómetro). Se ve cool, pero no es brújula.</li>
-            <li>Calibrar pone el ángulo actual como “cero”. Hazlo con la nave quieta.</li>
-          </ul>
+        <div class="fc-footer">
+          <div class="fc-footer__line">
+            <span class="fc-dot" id="dotData"></span>
+            <span id="dataStatus">Esperando datos…</span>
+          </div>
+          <div class="fc-footer__hint">Tip: calibra con la nave quieta y “nivelada”.</div>
         </div>
-      </section>
+      </aside>
 
-      <section class="fc-view">
-        <canvas id="scene"></canvas>
-      </section>
-    </main>
+      <div class="fc-hudlines"></div>
+    </div>
   </div>
 `;
 
-// CSS FULLSCREEN + canvas con altura real
+// CSS (overridea Vite + HUD futurista + canvas full-screen)
 const style = document.createElement("style");
 style.textContent = `
+  /* OVERRIDE del template Vite (este es el culpable del "no ocupa toda la pantalla") */
+  html, body { width: 100%; height: 100%; margin: 0 !important; padding: 0 !important; }
+  body { display: block !important; place-items: initial !important; }
+  #app {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
   :root { color-scheme: dark; }
-  html, body { height: 100%; margin: 0; }
-  #app { height: 100vh; }
 
   .fc-root {
+    position: relative;
+    width: 100vw;
     height: 100vh;
-    display: flex;
-    flex-direction: column;
-    background:
-      radial-gradient(1200px 800px at 20% 10%, rgba(0,255,170,.08), transparent 50%),
-      radial-gradient(1000px 700px at 80% 20%, rgba(0,150,255,.06), transparent 55%),
-      #070a0d;
-    color: #d7fff2;
+    overflow: hidden;
+    background: #030507;
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-    overflow: hidden;
+    color: #d7fff2;
   }
 
-  .fc-topbar {
-    flex: 0 0 auto;
-    display:flex;
-    gap:16px;
-    justify-content: space-between;
-    align-items: center;
-    padding: 14px 16px;
-    border-bottom: 1px solid rgba(0,255,170,.15);
-  }
-
-  .fc-title__main { font-size: 16px; font-weight: 800; letter-spacing: .2px; }
-  .fc-title__sub { font-size: 12px; opacity: .75; margin-top: 2px; }
-
-  .fc-conn { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
-  .fc-pill { padding: 6px 10px; border: 1px solid rgba(0,255,170,.25); border-radius: 999px; font-size: 12px; background: rgba(0,0,0,.25); }
-  .fc-input { width: 260px; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(0,255,170,.25); background: rgba(0,0,0,.30); color: #d7fff2; outline: none; }
-  .fc-btn { padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(0,255,170,.25); background: rgba(0,0,0,.22); color: #d7fff2; cursor: pointer; }
-  .fc-btn:hover { background: rgba(0,255,170,.08); }
-
-  /* CLAVE: min-height:0 para que grid no colapse el canvas */
-  .fc-main {
-    flex: 1 1 auto;
-    min-height: 0;
-    display:grid;
-    grid-template-columns: 380px 1fr;
-    gap: 14px;
-    padding: 14px;
-  }
-
-  .fc-panel {
-    height: 100%;
-    min-height: 0;
-    overflow: auto;
-    border: 1px solid rgba(0,255,170,.15);
-    border-radius: 16px;
-    padding: 14px;
-    background: rgba(0,0,0,.25);
-    backdrop-filter: blur(6px);
-  }
-
-  .fc-panel__title { font-weight: 800; margin-bottom: 12px; opacity: .95; }
-  .fc-grid { display:grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-
-  .fc-card { position: relative; border: 1px solid rgba(0,255,170,.15); border-radius: 14px; padding: 10px; background: rgba(0,0,0,.25); }
-  .fc-card--wide { grid-column: 1 / -1; }
-  .fc-card__k { font-size: 12px; opacity: .75; }
-  .fc-card__v { font-size: 22px; font-weight: 900; margin-top: 6px; }
-  .fc-card__u { position:absolute; right: 10px; bottom: 10px; font-size: 12px; opacity: .6; }
-
-  .fc-warn { margin-top: 12px; border-radius: 14px; padding: 12px; border: 1px solid rgba(255,200,0,.35); background: rgba(255,200,0,.08); }
-  .fc-warn__t { font-weight: 900; }
-  .fc-warn__d { font-size: 12px; opacity: .85; margin-top: 6px; line-height: 1.35; }
-
-  .fc-notes { margin-top: 12px; font-size: 12px; opacity: .85; }
-  .fc-notes__t { font-weight: 800; margin-bottom: 6px; }
-  .fc-notes ul { margin: 0; padding-left: 16px; }
-
-  /* CLAVE: la vista llena la columna y el canvas sí tiene altura */
-  .fc-view {
-    height: 100%;
-    min-height: 0;
-    display: flex;
-    border: 1px solid rgba(0,255,170,.15);
-    border-radius: 16px;
-    overflow: hidden;
-    background: #000;
-  }
-
+  /* Canvas FULLSCREEN real */
   #scene {
-    flex: 1;
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
-    display:block;
+    display: block;
+  }
+
+  /* HUD overlay */
+  .fc-hud {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .fc-topbar, .fc-panel { pointer-events: auto; }
+
+  /* Scanlines / grid suave */
+  .fc-hud::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(900px 700px at 20% 10%, rgba(0,255,170,.10), transparent 55%),
+      radial-gradient(900px 700px at 80% 20%, rgba(0,160,255,.10), transparent 60%),
+      linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px);
+    background-size: auto, auto, 42px 42px, 42px 42px;
+    opacity: .55;
+    mix-blend-mode: screen;
+    pointer-events: none;
+  }
+
+  .fc-hudlines {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0,255,170,.035),
+      rgba(0,255,170,.035) 1px,
+      transparent 1px,
+      transparent 5px
+    );
+    opacity: .18;
+    animation: scan 5.5s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes scan {
+    0% { transform: translateY(0); }
+    100% { transform: translateY(10px); }
+  }
+
+  /* TOP BAR (flotante) */
+  .fc-topbar {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 14px;
+    border-radius: 18px;
+    border: 1px solid rgba(0,255,170,.22);
+    background: rgba(0,0,0,.40);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 0 0 1px rgba(0,255,170,.08), 0 10px 30px rgba(0,0,0,.45);
+  }
+
+  .fc-brand__title {
+    font-size: 14px;
+    font-weight: 900;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+  }
+  .fc-brand__sub {
+    margin-top: 3px;
+    font-size: 12px;
+    opacity: .75;
+  }
+
+  .fc-conn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .fc-pill {
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(0,255,170,.28);
+    background: rgba(0,0,0,.35);
+    font-size: 12px;
+    color: #b7ffe9;
+  }
+
+  .fc-input {
+    width: 270px;
+    padding: 9px 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(0,255,170,.25);
+    background: rgba(0,0,0,.35);
+    color: #d7fff2;
+    outline: none;
+  }
+
+  .fc-btn {
+    padding: 9px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(0,255,170,.30);
+    background: rgba(0,255,170,.10);
+    color: #d7fff2;
+    cursor: pointer;
+    font-weight: 800;
+    letter-spacing: .3px;
+  }
+  .fc-btn:hover { background: rgba(0,255,170,.16); }
+  .fc-btn--ghost {
+    background: rgba(0,0,0,.25);
+  }
+  .fc-btn--ghost:hover { background: rgba(0,0,0,.35); }
+
+  /* PANEL IZQ flotante */
+  .fc-panel {
+    position: absolute;
+    top: 92px;
+    left: 16px;
+    width: 360px;
+    max-height: calc(100vh - 110px);
+    overflow: auto;
+    padding: 14px;
+    border-radius: 18px;
+    border: 1px solid rgba(0,255,170,.18);
+    background: rgba(0,0,0,.40);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 0 0 1px rgba(0,255,170,.08), 0 22px 50px rgba(0,0,0,.55);
+  }
+
+  .fc-panel__title {
+    font-weight: 900;
+    font-size: 12px;
+    letter-spacing: 1.8px;
+    opacity: .9;
+    margin-bottom: 12px;
+  }
+
+  .fc-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+
+  .fc-card {
+    position: relative;
+    border-radius: 16px;
+    border: 1px solid rgba(0,255,170,.14);
+    background: linear-gradient(180deg, rgba(0,255,170,.06), rgba(0,0,0,.25));
+    padding: 10px;
+    overflow: hidden;
+  }
+
+  .fc-card::before {
+    content: "";
+    position: absolute;
+    inset: -40%;
+    background: radial-gradient(circle at 30% 30%, rgba(0,255,170,.18), transparent 50%);
+    transform: rotate(25deg);
+    opacity: .35;
+    pointer-events: none;
+  }
+
+  .fc-card--wide { grid-column: 1 / -1; }
+
+  .fc-card__k {
+    font-size: 11px;
+    letter-spacing: 1px;
+    opacity: .75;
+  }
+
+  .fc-card__v {
+    margin-top: 6px;
+    font-size: 20px;
+    font-weight: 950;
+  }
+
+  .fc-card__u {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    font-size: 12px;
+    opacity: .6;
+  }
+
+  .fc-warn {
+    margin-top: 12px;
+    border-radius: 16px;
+    padding: 12px;
+    border: 1px solid rgba(255,200,0,.40);
+    background: rgba(255,200,0,.08);
+  }
+  .fc-warn__t { font-weight: 950; letter-spacing: .4px; }
+  .fc-warn__d { margin-top: 6px; font-size: 12px; opacity: .85; line-height: 1.35; }
+
+  .fc-footer {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(0,255,170,.12);
+    opacity: .9;
+  }
+  .fc-footer__line {
+    display:flex;
+    align-items:center;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .fc-footer__hint {
+    margin-top: 6px;
+    font-size: 11px;
+    opacity: .7;
+  }
+
+  .fc-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.25);
+    box-shadow: 0 0 0 1px rgba(0,255,170,.25);
+  }
+  .fc-dot--ok {
+    background: rgba(0,255,170,.9);
+    box-shadow: 0 0 18px rgba(0,255,170,.5), 0 0 0 1px rgba(0,255,170,.35);
   }
 
   @media (max-width: 980px) {
-    .fc-main { grid-template-columns: 1fr; }
     .fc-input { width: 100%; }
-    .fc-view { min-height: 55vh; }
+    .fc-topbar { left: 10px; right: 10px; top: 10px; }
+    .fc-panel { left: 10px; right: 10px; width: auto; }
   }
 `;
 document.head.appendChild(style);
@@ -229,41 +388,38 @@ const vAx = document.getElementById("vAx")!;
 const vAy = document.getElementById("vAy")!;
 const vAz = document.getElementById("vAz")!;
 const vG = document.getElementById("vG")!;
-const vModel = document.getElementById("vModel")!;
 const warnBox = document.getElementById("warnBox") as HTMLDivElement;
 
+const dotData = document.getElementById("dotData") as HTMLSpanElement;
+const dataStatus = document.getElementById("dataStatus") as HTMLSpanElement;
+
 // ===========================
-// Three.js Scene
+// Three.js
 // ===========================
 const canvas = document.getElementById("scene") as HTMLCanvasElement;
 
-const renderer = new THREE.WebGLRenderer({
-  canvas,
-  antialias: true,
-  alpha: false,
-});
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setClearColor(0x000000, 1);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x000000, 0.085);
+scene.fog = new THREE.FogExp2(0x000000, 0.07);
 
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 2000);
 camera.position.set(0, 0.55, 3.0);
 camera.lookAt(0, 0.0, 0);
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const key = new THREE.DirectionalLight(0xffffff, 0.85);
+key.position.set(3, 4, 2);
+scene.add(key);
 
-const keyLight = new THREE.DirectionalLight(0xffffff, 0.75);
-keyLight.position.set(3, 4, 2);
-scene.add(keyLight);
-
-// “Estrellas”
+// Estrellas
 const starsGeom = new THREE.BufferGeometry();
-const STAR_COUNT = 900;
+const STAR_COUNT = 1100;
 const starPos = new Float32Array(STAR_COUNT * 3);
 for (let i = 0; i < STAR_COUNT; i++) {
-  const r = 25 + Math.random() * 120;
+  const r = 30 + Math.random() * 140;
   const theta = Math.random() * Math.PI * 2;
   const phi = Math.acos(2 * Math.random() - 1);
   starPos[i * 3 + 0] = r * Math.sin(phi) * Math.cos(theta);
@@ -277,14 +433,14 @@ const stars = new THREE.Points(
 );
 scene.add(stars);
 
-// Grupo de nave
+// Grupo nave
 const ship = new THREE.Group();
 scene.add(ship);
 let shipReady = false;
 
-// Wireframe bonito (Edges)
-function makeWireframeFromGLTF(root: THREE.Object3D) {
-  const lineMat = new THREE.LineBasicMaterial({
+// Wireframe (edges)
+function makeWireframe(root: THREE.Object3D) {
+  const mat = new THREE.LineBasicMaterial({
     color: 0x66ffdd,
     transparent: true,
     opacity: 0.95,
@@ -294,12 +450,9 @@ function makeWireframeFromGLTF(root: THREE.Object3D) {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh) return;
 
-    // Oculta mesh original
     mesh.visible = false;
-
-    const geo = mesh.geometry;
-    const edges = new THREE.EdgesGeometry(geo, 15);
-    const lines = new THREE.LineSegments(edges, lineMat);
+    const edges = new THREE.EdgesGeometry(mesh.geometry, 15);
+    const lines = new THREE.LineSegments(edges, mat);
 
     lines.position.copy(mesh.position);
     lines.rotation.copy(mesh.rotation);
@@ -319,9 +472,9 @@ loader.load(
     const root = gltf.scene;
     root.updateMatrixWorld(true);
 
-    makeWireframeFromGLTF(root);
+    makeWireframe(root);
 
-    // 1) centrar pivot (pre-escala)
+    // Centrar pivot (pre-escala)
     ship.updateMatrixWorld(true);
     let box = new THREE.Box3().setFromObject(ship);
     let size = new THREE.Vector3();
@@ -330,7 +483,7 @@ loader.load(
     box.getCenter(center);
     ship.position.sub(center);
 
-    // 2) escalar
+    // Escalar a tamaño visual
     ship.updateMatrixWorld(true);
     box = new THREE.Box3().setFromObject(ship);
     box.getSize(size);
@@ -339,35 +492,31 @@ loader.load(
     const s = target / (maxDim || 1);
     ship.scale.setScalar(s);
 
-    // 3) re-centrar tras escalar (muy importante)
+    // Re-centrar tras escalar
     ship.updateMatrixWorld(true);
     box = new THREE.Box3().setFromObject(ship);
     box.getSize(size);
     box.getCenter(center);
     ship.position.sub(center);
 
-    // 4) bajar un poco (ajuste visual)
+    // Bajar nave (ajuste visual)
     ship.position.y -= size.y * 0.12;
 
-    // cámara centrada
     camera.position.set(0, 0.55, 3.0);
     camera.lookAt(0, 0.0, 0);
 
     shipReady = true;
-    vModel.textContent = `Cargado ✅ ${MODEL_URL}`;
   },
   undefined,
   (err) => {
     console.error("Error cargando GLB:", err);
-    vModel.textContent = `Error ❌ revisa ${MODEL_URL}`;
   }
 );
 
-// Resize robusto (usa tamaño real)
+// Resize: FULLSCREEN real
 function resize() {
-  const rect = canvas.getBoundingClientRect();
-  const w = Math.max(1, Math.floor(rect.width));
-  const h = Math.max(1, Math.floor(rect.height));
+  const w = Math.max(1, Math.floor(window.innerWidth));
+  const h = Math.max(1, Math.floor(window.innerHeight));
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
@@ -389,7 +538,6 @@ type Telemetry = {
 };
 
 let ws: WebSocket | null = null;
-let wsURL = DEFAULT_WS_URL;
 let lastTelemetryAt = 0;
 
 // offsets de calibración
@@ -410,14 +558,14 @@ function setWSStatus(ok: boolean, text: string) {
 
 function disconnectWS() {
   if (!ws) return;
-  try { ws.close(); } catch {}
+  try {
+    ws.close();
+  } catch {}
   ws = null;
 }
 
 function connectWS(url: string) {
   disconnectWS();
-  wsURL = url;
-
   setWSStatus(false, "WS: conectando…");
 
   ws = new WebSocket(url);
@@ -428,10 +576,18 @@ function connectWS(url: string) {
 
   ws.onmessage = (ev) => {
     let d: Telemetry | null = null;
-    try { d = JSON.parse(String(ev.data)); } catch { return; }
+    try {
+      d = JSON.parse(String(ev.data));
+    } catch {
+      return;
+    }
     if (!d) return;
 
     lastTelemetryAt = performance.now();
+
+    // estado datos
+    dotData.classList.add("fc-dot--ok");
+    dataStatus.textContent = "Datos en vivo";
 
     // aplicar cero
     const r = d.r - zeroR;
@@ -477,7 +633,9 @@ btnCal.addEventListener("click", () => {
   zeroY += sY;
 
   // reset suave a cero
-  sR = 0; sP = 0; sY = 0;
+  sR = 0;
+  sP = 0;
+  sY = 0;
 
   vRoll.textContent = "0.00";
   vPitch.textContent = "0.00";
@@ -488,17 +646,16 @@ btnCal.addEventListener("click", () => {
 connectWS(DEFAULT_WS_URL);
 
 // ===========================
-// Rotación de la nave
+// Rotación nave
 // ===========================
 function applyAttitude(rollDeg: number, pitchDeg: number, yawDeg: number) {
   if (!shipReady) return;
 
-  // Mapeo típico: pitch -> X, roll -> Z, yaw -> Y
   const pitchRad = THREE.MathUtils.degToRad(pitchDeg);
   const rollRad = THREE.MathUtils.degToRad(rollDeg);
   const yawRad = THREE.MathUtils.degToRad(yawDeg);
 
-  // Si gira raro, prueba invertir signos aquí:
+  // Mapeo típico: pitch -> X, roll -> Z, yaw -> Y
   ship.rotation.x = pitchRad;
   ship.rotation.z = rollRad;
   ship.rotation.y = yawRad;
@@ -517,25 +674,21 @@ function lerp(a: number, b: number, t: number) {
 function animate() {
   requestAnimationFrame(animate);
 
-  // Si no llegan datos, demo suave
+  // Si no llegan datos, modo demo
   const now = performance.now();
-  const silentFor = now - lastTelemetryAt;
-  if (silentFor > 1200) {
+  if (now - lastTelemetryAt > 1200) {
+    dotData.classList.remove("fc-dot--ok");
+    dataStatus.textContent = "Esperando datos…";
+
     const t = now * 0.001;
     const demoR = Math.sin(t * 0.8) * 12;
     const demoP = Math.sin(t * 0.6) * 8;
     const demoY = Math.sin(t * 0.35) * 18;
-
-    vRoll.textContent = demoR.toFixed(2);
-    vPitch.textContent = demoP.toFixed(2);
-    vYaw.textContent = demoY.toFixed(2);
-
     applyAttitude(demoR, demoP, demoY);
   }
 
-  stars.rotation.y += 0.0008;
+  stars.rotation.y += 0.0007;
 
   renderer.render(scene, camera);
 }
 animate();
-// ===========================
