@@ -5,7 +5,7 @@
 
 // ===================== WIFI (STA) =====================
 const char* WIFI_SSID = "";
-const char* WIFI_PASS = ""; // ⚠️ No lo subas a GitHub
+const char* WIFI_PASS = ""; 
 
 // WebSocket server en puerto 81
 WebSocketsServer ws(81);
